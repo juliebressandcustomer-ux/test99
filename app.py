@@ -216,6 +216,8 @@ Dialogue: 0,0:00:00.00,0:99:59.99,Default,,0,0,0,,{ass_text}
     logger.info(f"[{job_id}] Font: {font_name}")
     logger.info(f"[{job_id}] Position: {data.text_position}, Alignment: {alignment}, MarginV: {margin_v}")
     logger.info(f"[{job_id}] ASS text: {ass_text}")
+    logger.info(f"[{job_id}] ASS file content:")
+    logger.info(f"[{job_id}] {ass_content}")
 
     # ---------- STEP 3: VIDEO DOWNLOAD ----------
     logger.info(f"[{job_id}] STEP 3: Downloading video")
@@ -244,11 +246,15 @@ Dialogue: 0,0:00:00.00,0:99:59.99,Default,,0,0,0,,{ass_text}
     
     scale = "scale=1080:1350" if data.format == "4:5" else "scale=1080:1080"
     
-    # Use ASS subtitles instead of drawtext - much more reliable for multiline text
-    vf = f"{scale},subtitles={ass_file}"
+    # Escape the ASS file path for FFmpeg (colons need escaping on Windows-style paths)
+    escaped_ass = ass_file.replace('\\', '\\\\').replace(':', '\\:')
+    
+    # Use ASS subtitles - specify font directory explicitly for libass
+    vf = f"{scale},subtitles='{escaped_ass}':fontsdir=/usr/share/fonts/truetype"
     
     logger.info(f"[{job_id}] Scale filter: {scale}")
     logger.info(f"[{job_id}] Using ASS subtitle file: {ass_file}")
+    logger.info(f"[{job_id}] Fonts directory: /usr/share/fonts/truetype")
     logger.info(f"[{job_id}] Complete filter:")
     logger.info(f"[{job_id}] {vf}")
 
