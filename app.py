@@ -146,22 +146,29 @@ def convert(data: ConvertRequest):
     logger.info(f"[{job_id}] Raw input text: {repr(data.text)}")
     logger.info(f"[{job_id}] Text bytes: {data.text.encode('utf-8').hex()}")
     
-    # Remove ALL invisible/special/non-printable characters
+    # Remove ONLY invisible/control characters, keep emojis and accented characters
     import unicodedata
     
-    # Normalize and remove non-ASCII characters
     clean_text = data.text
-    # Remove zero-width characters, non-breaking spaces, etc
-    clean_text = ''.join(char for char in clean_text if unicodedata.category(char)[0] != 'C' or char in '\n\r\t')
-    # Convert to ASCII only
-    clean_text = clean_text.encode('ascii', 'ignore').decode('ascii')
+    # Remove zero-width characters, control characters, but keep printable Unicode (including emojis)
+    clean_text = ''.join(char for char in clean_text 
+                        if unicodedata.category(char)[0] != 'C' or char in '\n\r\t')
     # Remove extra spaces
     clean_text = ' '.join(clean_text.split())
     
     logger.info(f"[{job_id}] Clean text: {repr(clean_text)}")
     logger.info(f"[{job_id}] Clean text bytes: {clean_text.encode('utf-8').hex()}")
     
-    wrapped_text = smart_wrap(clean_text, data.font_size)
+    # Don't convert to uppercase if there are emojis (they would be lost)
+    has_emoji = any(ord(char) > 127 for char in clean_text)
+    
+    if has_emoji:
+        # Keep original case to preserve emojis
+        wrapped_text = '\n'.join(textwrap.wrap(clean_text, width=18 if data.font_size <= 64 else 15))
+        logger.info(f"[{job_id}] Emoji detected, keeping original case")
+    else:
+        # Use normal smart_wrap with uppercase
+        wrapped_text = smart_wrap(clean_text, data.font_size)
     
     logger.info(f"[{job_id}] Wrapped text: {repr(wrapped_text)}")
     
