@@ -7,21 +7,26 @@ app = FastAPI()
 
 TMP_DIR = "/tmp"
 FONT_DIR = "/app/fonts"
+DEFAULT_FONT = "Montserrat-Bold.ttf"
 
-# ----------- INPUT MODEL -----------
+# ===============================
+# MODELE INPUT
+# ===============================
 
 class ConvertRequest(BaseModel):
     drive_url: str
     text: str
-    format: str = "1:1"          # "1:1" or "4:5"
-    font: str = "Inter-Bold.ttf"
+    format: str = "1:1"              # 1:1 | 4:5
+    font: str = DEFAULT_FONT
     font_size: int = 64
-    text_position: str = "top"   # top / center / bottom
-    animation: str = "fade"      # none / fade / slide / float
+    text_position: str = "top"       # top | center | bottom
+    animation: str = "fade"          # none | fade
 
-# ----------- TEXT WRAP LOGIC -----------
+# ===============================
+# UTILS TEXTE
+# ===============================
 
-def smart_wrap(text, font_size):
+def smart_wrap(text: str, font_size: int) -> str:
     text = text.upper()
 
     if font_size <= 56:
@@ -40,74 +45,76 @@ def smart_wrap(text, font_size):
 
     return "\n".join(lines)
 
-# ----------- POSITION -----------
+def escape_ffmpeg_text(text: str) -> str:
+    return (
+        text
+        .replace("\\", "\\\\")
+        .replace(":", "\\:")
+        .replace("'", "\\'")
+        .replace("\n", "\\n")
+    )
 
-def get_y(position, fmt):
-    if fmt == "4:5":
-        return {
-            "top": "120",
-            "center": "(h-text_h)/2",
-            "bottom": "h-text_h-160"
-        }.get(position, "120")
-    return {
-        "top": "90",
-        "center": "(h-text_h)/2",
-        "bottom": "h-text_h-120"
-    }.get(position, "90")
+# ===============================
+# POSITION TEXTE
+# ===============================
 
-# ----------- ANIMATION -----------
+def get_y_position(position: str) -> str:
+    if position == "center":
+        return "(h-text_h)/2"
+    if position == "bottom":
+        return "h-text_h-140"
+    return "120"   # top
 
-def get_alpha(anim):
-    if anim in ["fade", "slide"]:
-        return "alpha='if(lt(t,0.8),t/0.8,1)'"
-    return "alpha=1"
-
-def get_motion(anim):
-    if anim == "slide":
-        return "y=y+40*(1-t)"
-    if anim == "float":
-        return "y=y+12*sin(2*PI*t)"
-    return "y=y"
-
-# ----------- MAIN ENDPOINT -----------
+# ===============================
+# ENDPOINT PRINCIPAL
+# ===============================
 
 @app.post("/convert")
 def convert(data: ConvertRequest):
 
     uid = str(uuid.uuid4())
-    input_file = f"{TMP_DIR}/in_{uid}.webm"
-    output_file = f"{TMP_DIR}/out_{uid}.mp4"
+    input_file = f"{TMP_DIR}/input_{uid}.webm"
+    output_file = f"{TMP_DIR}/output_{uid}.mp4"
 
-    font_path = f"{FONT_DIR}/{data.font}"
+    # ---------- FONT SAFE ----------
+    font_name = data.font.strip()
+    if not font_name.lower().endswith(".ttf"):
+        font_name += ".ttf"
+
+    font_path = f"{FONT_DIR}/{font_name}"
     if not os.path.exists(font_path):
-        raise HTTPException(status_code=400, detail="Font not found")
+        font_path = f"{FONT_DIR}/{DEFAULT_FONT}"
 
+    # ---------- TEXTE ----------
     wrapped = smart_wrap(data.text, data.font_size)
-    y_base = get_y(data.text_position, data.format)
-    alpha = get_alpha(data.animation)
-    motion = get_motion(data.animation)
+    wrapped = escape_ffmpeg_text(wrapped)
+
+    y_pos = get_y_position(data.text_position)
 
     scale = "scale=1080:1350" if data.format == "4:5" else "scale=1080:1080"
 
-    # Download video
+    # ---------- DOWNLOAD VIDEO ----------
     r = requests.get(data.drive_url, stream=True)
     if r.status_code != 200:
-        raise HTTPException(status_code=400, detail="Download failed")
+        raise HTTPException(status_code=400, detail="Video download failed")
 
     with open(input_file, "wb") as f:
         for chunk in r.iter_content(8192):
             f.write(chunk)
 
+    # ---------- DRAWTEXT ----------
     drawtext = (
         f"drawtext=text='{wrapped}':"
         f"fontfile={font_path}:"
         f"fontsize={data.font_size}:"
         "fontcolor=white:"
-        "line_spacing=14:"
+        "line_spacing=18:"
         "x=(w-text_w)/2:"
-        f"y={y_base}:"
-        "box=1:boxcolor=black@0.65:boxborderw=28:"
-        f"{alpha}"
+        f"y={y_pos}:"
+        "box=1:"
+        "boxcolor=black@0.7:"
+        "boxborderw=36:"
+        "alpha='if(lt(t,0.6),t/0.6,1)'"
     )
 
     vf = f"{scale},{drawtext}"
@@ -127,11 +134,13 @@ def convert(data: ConvertRequest):
         "download_url": f"/download/{uid}"
     }
 
-# ----------- DOWNLOAD -----------
+# ===============================
+# DOWNLOAD
+# ===============================
 
 @app.get("/download/{uid}")
 def download(uid: str):
-    path = f"{TMP_DIR}/out_{uid}.mp4"
+    path = f"{TMP_DIR}/output_{uid}.mp4"
     if not os.path.exists(path):
         raise HTTPException(status_code=404)
     return FileResponse(path, media_type="video/mp4", filename="video.mp4")
