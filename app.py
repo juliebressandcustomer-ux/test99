@@ -205,7 +205,8 @@ def convert(data: ConvertRequest):
     scale = "scale=1080:1350" if data.format == "4:5" else "scale=1080:1080"
     y_expr = f"{base_y(data.text_position)}+({data.text_offset})"
 
-    # Use textfile instead of text for better newline handling
+    # Use textfile with expansion=none to prevent character interpretation issues
+    # Don't use text_align with textfile - it causes rendering problems
     drawtext = (
         f"drawtext=textfile='{text_file}':"
         f"fontfile='{font_path}':"
@@ -216,7 +217,7 @@ def convert(data: ConvertRequest):
         "line_spacing=14:"
         "x=(w-text_w)/2:"
         f"y={y_expr}:"
-        "text_align=C"
+        "expansion=none"
     )
 
     vf = f"{scale},{drawtext}"
