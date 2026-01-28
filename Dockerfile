@@ -1,6 +1,9 @@
 FROM python:3.11-slim
 
-RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+# Install FFmpeg and fonts
+RUN apt-get update && \
+    apt-get install -y ffmpeg fontconfig fonts-liberation && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
