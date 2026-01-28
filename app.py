@@ -51,10 +51,10 @@ def root():
     }
 
 TMP_DIR = "/tmp"
-# Use system fonts instead of custom font directory
+# Use DejaVu fonts - more comprehensive Unicode support
 SYSTEM_FONTS = {
-    "Arial-Bold.ttf": "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-    "Arial.ttf": "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "Arial-Bold.ttf": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "Arial.ttf": "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "Impact.ttf": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "Montserrat-Bold.ttf": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 }
@@ -197,8 +197,16 @@ def convert(data: ConvertRequest):
     scale = "scale=1080:1350" if data.format == "4:5" else "scale=1080:1080"
     y_expr = f"{base_y(data.text_position)}+({data.text_offset})"
 
+    # IMPORTANT: Replace \n with actual newline for FFmpeg, not escaped version
+    # FFmpeg expects literal newline character, not the string "\n"
+    ffmpeg_text = escaped_text.replace('\\n', '\n')
+    
+    logger.info(f"[{job_id}] Text for FFmpeg (repr): {repr(ffmpeg_text)}")
+    logger.info(f"[{job_id}] Text for FFmpeg (raw):")
+    logger.info(f"[{job_id}] {ffmpeg_text}")
+
     drawtext = (
-        f"drawtext=text='{escaped_text}':"
+        f"drawtext=text='{ffmpeg_text}':"
         f"fontfile='{font_path}':"
         f"fontsize={data.font_size}:"
         "fontcolor=white:"
