@@ -4,7 +4,7 @@ from pydantic import BaseModel
 import subprocess, requests, uuid, os, textwrap, logging
 
 # ===============================
-# LOGS (Railway friendly)
+# LOGGING (Railway)
 # ===============================
 logging.basicConfig(
     level=logging.INFO,
@@ -29,10 +29,9 @@ class ConvertRequest(BaseModel):
     font_size: int = 64
     text_position: str = "top"          # top | center | bottom
     text_offset: int = 0                # vertical offset (px)
-    animation: str = "smooth"           # smooth | none
 
 # ===============================
-# SMART TEXT WRAP (MAX 2 LINES)
+# SMART WRAP (MAX 2 LINES)
 # ===============================
 def smart_wrap(text: str, font_size: int) -> str:
     text = text.upper()
@@ -93,7 +92,7 @@ def convert(data: ConvertRequest):
     with open(text_file, "w", encoding="utf-8") as f:
         f.write(wrapped_text)
 
-    logger.info("Wrapped text:")
+    logger.info("Final text:")
     logger.info(wrapped_text)
 
     # ---------- DOWNLOAD VIDEO ----------
@@ -110,29 +109,18 @@ def convert(data: ConvertRequest):
 
     # ---------- FILTERS ----------
     scale = "scale=1080:1350" if data.format == "4:5" else "scale=1080:1080"
-
-    y_base = base_y(data.text_position)
-
-    # apply offset (pixel-based)
-    y_expr = f"{y_base}+({data.text_offset})"
-
-    if data.animation == "smooth":
-        y_expr = f"{y_expr}+20*(1-exp(-3*t))"
-        alpha = "alpha='if(lt(t,1),1-exp(-3*t),1)'"
-    else:
-        alpha = "alpha=1"
+    y_expr = f"{base_y(data.text_position)}+({data.text_offset})"
 
     drawtext = (
         f"drawtext=textfile='{text_file}':"
         f"fontfile='{font_path}':"
         f"fontsize={data.font_size}:"
         "fontcolor=white:"
-        "borderw=4:"
-        "bordercolor=white@0.9:"
-        "line_spacing=18:"
+        "borderw=2:"
+        "bordercolor=white:"
+        "line_spacing=14:"
         "x=(w-text_w)/2:"
-        f"y={y_expr}:"
-        f"{alpha}"
+        f"y={y_expr}"
     )
 
     vf = f"{scale},{drawtext}"
