@@ -16,7 +16,7 @@ app = FastAPI()
 
 TMP_DIR = "/tmp"
 FONT_DIR = "/app/fonts"
-DEFAULT_FONT = "Montserrat-Bold.ttf"
+DEFAULT_FONT = "Arial-Bold.ttf"  # Plus fiable pour l'encodage
 
 # ===============================
 # INPUT MODEL
@@ -87,10 +87,12 @@ def convert(data: ConvertRequest):
         font_path = f"{FONT_DIR}/{DEFAULT_FONT}"
 
     # ---------- TEXT ----------
-    wrapped_text = smart_wrap(data.text, data.font_size)
-
-    with open(text_file, "w", encoding="utf-8") as f:
-        f.write(wrapped_text)
+    # Clean text: remove any invisible/special characters
+    clean_text = data.text.encode('ascii', 'ignore').decode('ascii')
+    wrapped_text = smart_wrap(clean_text, data.font_size)
+    
+    # Escape special characters for FFmpeg
+    escaped_text = wrapped_text.replace(":", "\\:").replace("'", "\\'")
 
     logger.info("Final text:")
     logger.info(wrapped_text)
@@ -112,7 +114,7 @@ def convert(data: ConvertRequest):
     y_expr = f"{base_y(data.text_position)}+({data.text_offset})"
 
     drawtext = (
-        f"drawtext=textfile='{text_file}':"
+        f"drawtext=text='{escaped_text}':"
         f"fontfile='{font_path}':"
         f"fontsize={data.font_size}:"
         "fontcolor=white:"
