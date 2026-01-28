@@ -120,7 +120,8 @@ def convert(data: ConvertRequest):
         "bordercolor=white:"
         "line_spacing=14:"
         "x=(w-text_w)/2:"
-        f"y={y_expr}"
+        f"y={y_expr}:"
+        "text_align=C"
     )
 
     vf = f"{scale},{drawtext}"
@@ -138,7 +139,12 @@ def convert(data: ConvertRequest):
     logger.info("Running FFmpeg")
     logger.info(" ".join(cmd))
 
-    subprocess.run(cmd, check=True)
+    # Force UTF-8 encoding for subprocess
+    env = os.environ.copy()
+    env['LC_ALL'] = 'C.UTF-8'
+    env['LANG'] = 'C.UTF-8'
+
+    subprocess.run(cmd, check=True, env=env)
 
     logger.info("Render finished")
 
