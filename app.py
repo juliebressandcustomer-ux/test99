@@ -169,6 +169,12 @@ def convert(data: ConvertRequest):
     with open(text_file, "w", encoding="utf-8", newline='\n') as f:
         f.write(wrapped_text)
     
+    # Verify what was actually written
+    with open(text_file, "rb") as f:
+        file_bytes = f.read()
+    logger.info(f"[{job_id}] File hex bytes: {file_bytes.hex()}")
+    logger.info(f"[{job_id}] File content (repr): {repr(file_bytes.decode('utf-8'))}")
+    
     logger.info(f"[{job_id}] Text written to file: {text_file}")
 
     # ---------- STEP 3: VIDEO DOWNLOAD ----------
