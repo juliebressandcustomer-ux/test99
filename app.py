@@ -87,13 +87,27 @@ def convert(data: ConvertRequest):
         font_path = f"{FONT_DIR}/{DEFAULT_FONT}"
 
     # ---------- TEXT ----------
-    # Clean text: remove any invisible/special characters
-    clean_text = data.text.encode('ascii', 'ignore').decode('ascii')
+    # Remove ALL invisible/special/non-printable characters
+    import unicodedata
+    
+    # Normalize and remove non-ASCII characters
+    clean_text = data.text
+    # Remove zero-width characters, non-breaking spaces, etc
+    clean_text = ''.join(char for char in clean_text if unicodedata.category(char)[0] != 'C' or char in '\n\r\t')
+    # Convert to ASCII only
+    clean_text = clean_text.encode('ascii', 'ignore').decode('ascii')
+    # Remove extra spaces
+    clean_text = ' '.join(clean_text.split())
+    
     wrapped_text = smart_wrap(clean_text, data.font_size)
     
     # Escape special characters for FFmpeg
-    escaped_text = wrapped_text.replace(":", "\\:").replace("'", "\\'")
+    escaped_text = wrapped_text.replace(":", "\\:").replace("'", "\\'").replace('"', '\\"')
 
+    logger.info("Original text:")
+    logger.info(repr(data.text))
+    logger.info("Clean text:")
+    logger.info(repr(clean_text))
     logger.info("Final text:")
     logger.info(wrapped_text)
 
