@@ -15,8 +15,14 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 
 TMP_DIR = "/tmp"
-FONT_DIR = "/app/fonts"
-DEFAULT_FONT = "Arial-Bold.ttf"  # Plus fiable pour l'encodage
+# Use system fonts instead of custom font directory
+SYSTEM_FONTS = {
+    "Arial-Bold.ttf": "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "Arial.ttf": "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "Impact.ttf": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "Montserrat-Bold.ttf": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+}
+DEFAULT_FONT = "Arial-Bold.ttf"
 
 # ===============================
 # INPUT MODEL
@@ -81,10 +87,14 @@ def convert(data: ConvertRequest):
     if not font_name.lower().endswith(".ttf"):
         font_name += ".ttf"
 
-    font_path = f"{FONT_DIR}/{font_name}"
-    if not os.path.exists(font_path):
-        logger.warning("Font not found, fallback to default")
-        font_path = f"{FONT_DIR}/{DEFAULT_FONT}"
+    # Use system font mapping
+    if font_name in SYSTEM_FONTS:
+        font_path = SYSTEM_FONTS[font_name]
+    else:
+        logger.warning(f"Font {font_name} not found, using default")
+        font_path = SYSTEM_FONTS[DEFAULT_FONT]
+    
+    logger.info(f"Using font: {font_path}")
 
     # ---------- TEXT ----------
     # Remove ALL invisible/special/non-printable characters
