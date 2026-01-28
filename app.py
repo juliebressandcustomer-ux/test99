@@ -146,78 +146,30 @@ def convert(data: ConvertRequest):
     logger.info(f"[{job_id}] Raw input text: {repr(data.text)}")
     logger.info(f"[{job_id}] Text bytes: {data.text.encode('utf-8').hex()}")
     
-    # Remove ONLY invisible/control characters, keep emojis and accented characters
+    # Remove ALL invisible/special/non-printable characters INCLUDING emojis
     import unicodedata
     
     clean_text = data.text
-    # Remove zero-width characters, control characters, but keep printable Unicode (including emojis)
-    clean_text = ''.join(char for char in clean_text 
-                        if unicodedata.category(char)[0] != 'C' or char in '\n\r\t')
+    # Remove zero-width characters, control characters
+    clean_text = ''.join(char for char in clean_text if unicodedata.category(char)[0] != 'C' or char in '\n\r\t')
+    # Convert to ASCII only (removes emojis)
+    clean_text = clean_text.encode('ascii', 'ignore').decode('ascii')
     # Remove extra spaces
     clean_text = ' '.join(clean_text.split())
     
-    logger.info(f"[{job_id}] Clean text: {repr(clean_text)}")
+    logger.info(f"[{job_id}] Clean text (ASCII only, emojis removed): {repr(clean_text)}")
     logger.info(f"[{job_id}] Clean text bytes: {clean_text.encode('utf-8').hex()}")
     
-    # Don't convert to uppercase if there are emojis (they would be lost)
-    has_emoji = any(ord(char) > 127 for char in clean_text)
-    
-    if has_emoji:
-        # Keep original case to preserve emojis
-        wrapped_text = '\n'.join(textwrap.wrap(clean_text, width=18 if data.font_size <= 64 else 15))
-        logger.info(f"[{job_id}] Emoji detected, keeping original case")
-    else:
-        # Use normal smart_wrap with uppercase
-        wrapped_text = smart_wrap(clean_text, data.font_size)
+    wrapped_text = smart_wrap(clean_text, data.font_size)
     
     logger.info(f"[{job_id}] Wrapped text: {repr(wrapped_text)}")
     
-    # Create ASS subtitle file instead of plain text
-    # ASS format handles newlines much better than drawtext
-    ass_file = f"{TMP_DIR}/subtitle_{uid}.ass"
+    # Write text to file
+    text_file = f"{TMP_DIR}/text_{uid}.txt"
+    with open(text_file, "w", encoding="utf-8", newline='\n') as f:
+        f.write(wrapped_text)
     
-    # Replace \n with \N for ASS format (proper line break)
-    ass_text = wrapped_text.replace('\n', '\\N')
-    
-    # Calculate vertical position based on text_position
-    video_height = 1350 if data.format == "4:5" else 1080
-    
-    if data.text_position == "top":
-        alignment = 8  # Top center
-        margin_v = 120 + data.text_offset
-    elif data.text_position == "center":
-        alignment = 5  # Middle center
-        margin_v = video_height // 2 + data.text_offset
-    else:  # bottom
-        alignment = 2  # Bottom center
-        margin_v = 140 + data.text_offset
-    
-    # Use DejaVu Sans with Noto Color Emoji as fallback for emoji support
-    font_name = "DejaVu Sans,Noto Color Emoji"
-    
-    ass_content = f"""[Script Info]
-ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: {video_height}
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},{data.font_size},&H00FFFFFF,&H000000FF,&H00FFFFFF,&H00000000,-1,0,0,0,100,100,0,0,1,2,0,{alignment},10,10,{margin_v},1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-Dialogue: 0,0:00:00.00,0:99:59.99,Default,,0,0,0,,{ass_text}
-"""
-    
-    with open(ass_file, "w", encoding="utf-8") as f:
-        f.write(ass_content)
-    
-    logger.info(f"[{job_id}] ASS subtitle created: {ass_file}")
-    logger.info(f"[{job_id}] Font: {font_name}")
-    logger.info(f"[{job_id}] Position: {data.text_position}, Alignment: {alignment}, MarginV: {margin_v}")
-    logger.info(f"[{job_id}] ASS text: {ass_text}")
-    logger.info(f"[{job_id}] ASS file content:")
-    logger.info(f"[{job_id}] {ass_content}")
+    logger.info(f"[{job_id}] Text written to file: {text_file}")
 
     # ---------- STEP 3: VIDEO DOWNLOAD ----------
     logger.info(f"[{job_id}] STEP 3: Downloading video")
@@ -245,16 +197,27 @@ Dialogue: 0,0:00:00.00,0:99:59.99,Default,,0,0,0,,{ass_text}
     logger.info(f"[{job_id}] STEP 4: Building FFmpeg filters")
     
     scale = "scale=1080:1350" if data.format == "4:5" else "scale=1080:1080"
-    
-    # Escape the ASS file path for FFmpeg (colons need escaping on Windows-style paths)
-    escaped_ass = ass_file.replace('\\', '\\\\').replace(':', '\\:')
-    
-    # Use ASS subtitles - specify font directory explicitly for libass
-    vf = f"{scale},subtitles='{escaped_ass}':fontsdir=/usr/share/fonts/truetype"
+    y_expr = f"{base_y(data.text_position)}+({data.text_offset})"
+
+    # Use textfile with expansion=none
+    drawtext = (
+        f"drawtext=textfile='{text_file}':"
+        f"fontfile='{font_path}':"
+        f"fontsize={data.font_size}:"
+        "fontcolor=white:"
+        "borderw=2:"
+        "bordercolor=white:"
+        "line_spacing=14:"
+        "x=(w-text_w)/2:"
+        f"y={y_expr}:"
+        "expansion=none"
+    )
+
+    vf = f"{scale},{drawtext}"
     
     logger.info(f"[{job_id}] Scale filter: {scale}")
-    logger.info(f"[{job_id}] Using ASS subtitle file: {ass_file}")
-    logger.info(f"[{job_id}] Fonts directory: /usr/share/fonts/truetype")
+    logger.info(f"[{job_id}] Y expression: {y_expr}")
+    logger.info(f"[{job_id}] Using text file: {text_file}")
     logger.info(f"[{job_id}] Complete filter:")
     logger.info(f"[{job_id}] {vf}")
 
