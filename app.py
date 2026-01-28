@@ -163,11 +163,13 @@ def convert(data: ConvertRequest):
     
     wrapped_text = smart_wrap(clean_text, data.font_size)
     
-    # Escape special characters for FFmpeg
-    escaped_text = wrapped_text.replace(":", "\\:").replace("'", "\\'").replace('"', '\\"')
-
     logger.info(f"[{job_id}] Wrapped text: {repr(wrapped_text)}")
-    logger.info(f"[{job_id}] Escaped text: {repr(escaped_text)}")
+    
+    # Write to file with explicit UTF-8 encoding
+    with open(text_file, "w", encoding="utf-8", newline='\n') as f:
+        f.write(wrapped_text)
+    
+    logger.info(f"[{job_id}] Text written to file: {text_file}")
 
     # ---------- STEP 3: VIDEO DOWNLOAD ----------
     logger.info(f"[{job_id}] STEP 3: Downloading video")
@@ -197,16 +199,9 @@ def convert(data: ConvertRequest):
     scale = "scale=1080:1350" if data.format == "4:5" else "scale=1080:1080"
     y_expr = f"{base_y(data.text_position)}+({data.text_offset})"
 
-    # IMPORTANT: Replace \n with actual newline for FFmpeg, not escaped version
-    # FFmpeg expects literal newline character, not the string "\n"
-    ffmpeg_text = escaped_text.replace('\\n', '\n')
-    
-    logger.info(f"[{job_id}] Text for FFmpeg (repr): {repr(ffmpeg_text)}")
-    logger.info(f"[{job_id}] Text for FFmpeg (raw):")
-    logger.info(f"[{job_id}] {ffmpeg_text}")
-
+    # Use textfile instead of text for better newline handling
     drawtext = (
-        f"drawtext=text='{ffmpeg_text}':"
+        f"drawtext=textfile='{text_file}':"
         f"fontfile='{font_path}':"
         f"fontsize={data.font_size}:"
         "fontcolor=white:"
@@ -222,6 +217,7 @@ def convert(data: ConvertRequest):
     
     logger.info(f"[{job_id}] Scale filter: {scale}")
     logger.info(f"[{job_id}] Y expression: {y_expr}")
+    logger.info(f"[{job_id}] Using text file: {text_file}")
     logger.info(f"[{job_id}] Complete drawtext filter:")
     logger.info(f"[{job_id}] {drawtext}")
 
