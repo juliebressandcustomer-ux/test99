@@ -165,17 +165,32 @@ def convert(data: ConvertRequest):
     
     logger.info(f"[{job_id}] Wrapped text: {repr(wrapped_text)}")
     
-    # Write to file with explicit UTF-8 encoding
-    with open(text_file, "w", encoding="utf-8", newline='\n') as f:
-        f.write(wrapped_text)
+    # Create ASS subtitle file instead of plain text
+    # ASS format handles newlines much better than drawtext
+    ass_file = f"{TMP_DIR}/subtitle_{uid}.ass"
     
-    # Verify what was actually written
-    with open(text_file, "rb") as f:
-        file_bytes = f.read()
-    logger.info(f"[{job_id}] File hex bytes: {file_bytes.hex()}")
-    logger.info(f"[{job_id}] File content (repr): {repr(file_bytes.decode('utf-8'))}")
+    # Replace \n with \N for ASS format (proper line break)
+    ass_text = wrapped_text.replace('\n', '\\N')
     
-    logger.info(f"[{job_id}] Text written to file: {text_file}")
+    ass_content = f"""[Script Info]
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: {"1350" if data.format == "4:5" else "1080"}
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,DejaVu Sans,{data.font_size},&H00FFFFFF,&H000000FF,&H00FFFFFF,&H00000000,-1,0,0,0,100,100,0,0,1,2,0,8,10,10,{120 + data.text_offset},1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:99:59.99,Default,,0,0,0,,{ass_text}
+"""
+    
+    with open(ass_file, "w", encoding="utf-8") as f:
+        f.write(ass_content)
+    
+    logger.info(f"[{job_id}] ASS subtitle created: {ass_file}")
+    logger.info(f"[{job_id}] ASS text: {ass_text}")
 
     # ---------- STEP 3: VIDEO DOWNLOAD ----------
     logger.info(f"[{job_id}] STEP 3: Downloading video")
@@ -203,30 +218,14 @@ def convert(data: ConvertRequest):
     logger.info(f"[{job_id}] STEP 4: Building FFmpeg filters")
     
     scale = "scale=1080:1350" if data.format == "4:5" else "scale=1080:1080"
-    y_expr = f"{base_y(data.text_position)}+({data.text_offset})"
-
-    # Use textfile with expansion=none to prevent character interpretation issues
-    # Don't use text_align with textfile - it causes rendering problems
-    drawtext = (
-        f"drawtext=textfile='{text_file}':"
-        f"fontfile='{font_path}':"
-        f"fontsize={data.font_size}:"
-        "fontcolor=white:"
-        "borderw=2:"
-        "bordercolor=white:"
-        "line_spacing=14:"
-        "x=(w-text_w)/2:"
-        f"y={y_expr}:"
-        "expansion=none"
-    )
-
-    vf = f"{scale},{drawtext}"
+    
+    # Use ASS subtitles instead of drawtext - much more reliable for multiline text
+    vf = f"{scale},subtitles={ass_file}:force_style='Alignment=8'"
     
     logger.info(f"[{job_id}] Scale filter: {scale}")
-    logger.info(f"[{job_id}] Y expression: {y_expr}")
-    logger.info(f"[{job_id}] Using text file: {text_file}")
-    logger.info(f"[{job_id}] Complete drawtext filter:")
-    logger.info(f"[{job_id}] {drawtext}")
+    logger.info(f"[{job_id}] Using ASS subtitle file: {ass_file}")
+    logger.info(f"[{job_id}] Complete filter:")
+    logger.info(f"[{job_id}] {vf}")
 
     # ---------- STEP 5: FFMPEG EXECUTION ----------
     logger.info(f"[{job_id}] STEP 5: Running FFmpeg")
