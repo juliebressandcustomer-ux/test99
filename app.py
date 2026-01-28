@@ -172,14 +172,27 @@ def convert(data: ConvertRequest):
     # Replace \n with \N for ASS format (proper line break)
     ass_text = wrapped_text.replace('\n', '\\N')
     
+    # Calculate vertical position based on text_position
+    video_height = 1350 if data.format == "4:5" else 1080
+    
+    if data.text_position == "top":
+        alignment = 8  # Top center
+        margin_v = 120 + data.text_offset
+    elif data.text_position == "center":
+        alignment = 5  # Middle center
+        margin_v = video_height // 2 + data.text_offset
+    else:  # bottom
+        alignment = 2  # Bottom center
+        margin_v = 140 + data.text_offset
+    
     ass_content = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
-PlayResY: {"1350" if data.format == "4:5" else "1080"}
+PlayResY: {video_height}
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,DejaVu Sans,{data.font_size},&H00FFFFFF,&H000000FF,&H00FFFFFF,&H00000000,-1,0,0,0,100,100,0,0,1,2,0,8,10,10,{120 + data.text_offset},1
+Style: Default,DejaVu Sans,{data.font_size},&H00FFFFFF,&H000000FF,&H00FFFFFF,&H00000000,-1,0,0,0,100,100,0,0,1,2,0,{alignment},10,10,{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -190,6 +203,7 @@ Dialogue: 0,0:00:00.00,0:99:59.99,Default,,0,0,0,,{ass_text}
         f.write(ass_content)
     
     logger.info(f"[{job_id}] ASS subtitle created: {ass_file}")
+    logger.info(f"[{job_id}] Position: {data.text_position}, Alignment: {alignment}, MarginV: {margin_v}")
     logger.info(f"[{job_id}] ASS text: {ass_text}")
 
     # ---------- STEP 3: VIDEO DOWNLOAD ----------
@@ -220,7 +234,7 @@ Dialogue: 0,0:00:00.00,0:99:59.99,Default,,0,0,0,,{ass_text}
     scale = "scale=1080:1350" if data.format == "4:5" else "scale=1080:1080"
     
     # Use ASS subtitles instead of drawtext - much more reliable for multiline text
-    vf = f"{scale},subtitles={ass_file}:force_style='Alignment=8'"
+    vf = f"{scale},subtitles={ass_file}"
     
     logger.info(f"[{job_id}] Scale filter: {scale}")
     logger.info(f"[{job_id}] Using ASS subtitle file: {ass_file}")
