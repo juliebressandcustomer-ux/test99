@@ -14,6 +14,42 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
+# ===============================
+# DEBUG ENDPOINT
+# ===============================
+@app.get("/debug/fonts")
+def debug_fonts():
+    """Check which fonts are actually available on the system"""
+    font_status = {}
+    
+    for font_name, font_path in SYSTEM_FONTS.items():
+        exists = os.path.exists(font_path)
+        font_status[font_name] = {
+            "path": font_path,
+            "exists": exists,
+            "size": os.path.getsize(font_path) if exists else None
+        }
+    
+    return {
+        "system_fonts": font_status,
+        "default_font": DEFAULT_FONT,
+        "env": {
+            "LC_ALL": os.environ.get("LC_ALL"),
+            "LANG": os.environ.get("LANG")
+        }
+    }
+
+@app.get("/")
+def root():
+    return {
+        "status": "running",
+        "endpoints": {
+            "convert": "POST /convert",
+            "download": "GET /download/{uid}",
+            "debug_fonts": "GET /debug/fonts"
+        }
+    }
+
 TMP_DIR = "/tmp"
 # Use system fonts instead of custom font directory
 SYSTEM_FONTS = {
@@ -75,14 +111,17 @@ def base_y(position: str) -> str:
 def convert(data: ConvertRequest):
 
     uid = str(uuid.uuid4())
+    job_id = uid[:8]  # Short ID for logging
     input_video = f"{TMP_DIR}/input_{uid}.webm"
     output_video = f"{TMP_DIR}/output_{uid}.mp4"
     text_file = f"{TMP_DIR}/text_{uid}.txt"
 
-    logger.info(f"START render {uid}")
-    logger.info(f"Payload: {data.dict()}")
+    logger.info(f"[{job_id}] ===== START RENDER =====")
+    logger.info(f"[{job_id}] Full UUID: {uid}")
+    logger.info(f"[{job_id}] Payload: {data.dict()}")
 
-    # ---------- FONT SAFE ----------
+    # ---------- STEP 1: FONT SELECTION ----------
+    logger.info(f"[{job_id}] STEP 1: Font selection")
     font_name = data.font.strip()
     if not font_name.lower().endswith(".ttf"):
         font_name += ".ttf"
@@ -90,13 +129,23 @@ def convert(data: ConvertRequest):
     # Use system font mapping
     if font_name in SYSTEM_FONTS:
         font_path = SYSTEM_FONTS[font_name]
+        logger.info(f"[{job_id}] ✓ Font mapped: {font_name} -> {font_path}")
     else:
-        logger.warning(f"Font {font_name} not found, using default")
+        logger.warning(f"[{job_id}] ✗ Font {font_name} not found, using default")
         font_path = SYSTEM_FONTS[DEFAULT_FONT]
+        logger.info(f"[{job_id}] ✓ Using default font: {font_path}")
     
-    logger.info(f"Using font: {font_path}")
+    # Verify font exists
+    if os.path.exists(font_path):
+        logger.info(f"[{job_id}] ✓ Font file verified on disk")
+    else:
+        logger.error(f"[{job_id}] ✗ CRITICAL: Font file NOT FOUND at {font_path}")
 
-    # ---------- TEXT ----------
+    # ---------- STEP 2: TEXT PROCESSING ----------
+    logger.info(f"[{job_id}] STEP 2: Text processing")
+    logger.info(f"[{job_id}] Raw input text: {repr(data.text)}")
+    logger.info(f"[{job_id}] Text bytes: {data.text.encode('utf-8').hex()}")
+    
     # Remove ALL invisible/special/non-printable characters
     import unicodedata
     
@@ -109,31 +158,42 @@ def convert(data: ConvertRequest):
     # Remove extra spaces
     clean_text = ' '.join(clean_text.split())
     
+    logger.info(f"[{job_id}] Clean text: {repr(clean_text)}")
+    logger.info(f"[{job_id}] Clean text bytes: {clean_text.encode('utf-8').hex()}")
+    
     wrapped_text = smart_wrap(clean_text, data.font_size)
     
     # Escape special characters for FFmpeg
     escaped_text = wrapped_text.replace(":", "\\:").replace("'", "\\'").replace('"', '\\"')
 
-    logger.info("Original text:")
-    logger.info(repr(data.text))
-    logger.info("Clean text:")
-    logger.info(repr(clean_text))
-    logger.info("Final text:")
-    logger.info(wrapped_text)
+    logger.info(f"[{job_id}] Wrapped text: {repr(wrapped_text)}")
+    logger.info(f"[{job_id}] Escaped text: {repr(escaped_text)}")
 
-    # ---------- DOWNLOAD VIDEO ----------
-    r = requests.get(data.drive_url, stream=True)
-    if r.status_code != 200:
-        logger.error("Video download failed")
-        raise HTTPException(status_code=400, detail="Video download failed")
+    # ---------- STEP 3: VIDEO DOWNLOAD ----------
+    logger.info(f"[{job_id}] STEP 3: Downloading video")
+    logger.info(f"[{job_id}] URL: {data.drive_url}")
+    
+    try:
+        r = requests.get(data.drive_url, stream=True, timeout=30)
+        if r.status_code != 200:
+            logger.error(f"[{job_id}] ✗ Video download failed: HTTP {r.status_code}")
+            raise HTTPException(status_code=400, detail="Video download failed")
 
-    with open(input_video, "wb") as f:
-        for chunk in r.iter_content(8192):
-            f.write(chunk)
+        with open(input_video, "wb") as f:
+            total_bytes = 0
+            for chunk in r.iter_content(8192):
+                f.write(chunk)
+                total_bytes += len(chunk)
+        
+        logger.info(f"[{job_id}] ✓ Video downloaded: {total_bytes} bytes")
+        logger.info(f"[{job_id}] ✓ Saved to: {input_video}")
+    except Exception as e:
+        logger.error(f"[{job_id}] ✗ Download error: {str(e)}")
+        raise
 
-    logger.info("Video downloaded")
-
-    # ---------- FILTERS ----------
+    # ---------- STEP 4: FFMPEG FILTER CONSTRUCTION ----------
+    logger.info(f"[{job_id}] STEP 4: Building FFmpeg filters")
+    
     scale = "scale=1080:1350" if data.format == "4:5" else "scale=1080:1080"
     y_expr = f"{base_y(data.text_position)}+({data.text_offset})"
 
@@ -151,7 +211,15 @@ def convert(data: ConvertRequest):
     )
 
     vf = f"{scale},{drawtext}"
+    
+    logger.info(f"[{job_id}] Scale filter: {scale}")
+    logger.info(f"[{job_id}] Y expression: {y_expr}")
+    logger.info(f"[{job_id}] Complete drawtext filter:")
+    logger.info(f"[{job_id}] {drawtext}")
 
+    # ---------- STEP 5: FFMPEG EXECUTION ----------
+    logger.info(f"[{job_id}] STEP 5: Running FFmpeg")
+    
     cmd = [
         "ffmpeg", "-y",
         "-i", input_video,
@@ -162,20 +230,39 @@ def convert(data: ConvertRequest):
         output_video
     ]
 
-    logger.info("Running FFmpeg")
-    logger.info(" ".join(cmd))
+    logger.info(f"[{job_id}] FFmpeg command:")
+    logger.info(f"[{job_id}] {' '.join(cmd)}")
 
     # Force UTF-8 encoding for subprocess
     env = os.environ.copy()
     env['LC_ALL'] = 'C.UTF-8'
     env['LANG'] = 'C.UTF-8'
 
-    subprocess.run(cmd, check=True, env=env)
+    try:
+        result = subprocess.run(cmd, check=True, env=env, capture_output=True, text=True)
+        logger.info(f"[{job_id}] ✓ FFmpeg completed successfully")
+        if result.stderr:
+            logger.info(f"[{job_id}] FFmpeg stderr (last 500 chars): {result.stderr[-500:]}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"[{job_id}] ✗ FFmpeg failed with code {e.returncode}")
+        logger.error(f"[{job_id}] FFmpeg stderr: {e.stderr}")
+        raise
 
-    logger.info("Render finished")
+    # ---------- STEP 6: VERIFY OUTPUT ----------
+    logger.info(f"[{job_id}] STEP 6: Verifying output")
+    
+    if os.path.exists(output_video):
+        output_size = os.path.getsize(output_video)
+        logger.info(f"[{job_id}] ✓ Output file created: {output_size} bytes")
+        logger.info(f"[{job_id}] ✓ Output path: {output_video}")
+    else:
+        logger.error(f"[{job_id}] ✗ Output file NOT created!")
+
+    logger.info(f"[{job_id}] ===== RENDER COMPLETE =====")
 
     return {
         "status": "ok",
+        "job_id": job_id,
         "download_url": f"/download/{uid}"
     }
 
@@ -184,7 +271,16 @@ def convert(data: ConvertRequest):
 # ===============================
 @app.get("/download/{uid}")
 def download(uid: str):
+    job_id = uid[:8]
+    logger.info(f"[{job_id}] Download request received")
+    
     path = f"{TMP_DIR}/output_{uid}.mp4"
+    
     if not os.path.exists(path):
+        logger.error(f"[{job_id}] ✗ File not found: {path}")
         raise HTTPException(status_code=404)
+    
+    file_size = os.path.getsize(path)
+    logger.info(f"[{job_id}] ✓ Serving file: {file_size} bytes")
+    
     return FileResponse(path, media_type="video/mp4", filename="video.mp4")
