@@ -1,7 +1,16 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-import subprocess, requests, uuid, os, textwrap
+import subprocess, requests, uuid, os, textwrap, logging
+
+# ===============================
+# LOGS (Railway friendly)
+# ===============================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -10,22 +19,21 @@ FONT_DIR = "/app/fonts"
 DEFAULT_FONT = "Montserrat-Bold.ttf"
 
 # ===============================
-# MODELE INPUT
+# INPUT MODEL
 # ===============================
-
 class ConvertRequest(BaseModel):
     drive_url: str
     text: str
-    format: str = "1:1"              # 1:1 | 4:5
+    format: str = "1:1"                 # 1:1 | 4:5
     font: str = DEFAULT_FONT
     font_size: int = 64
-    text_position: str = "top"       # top | center | bottom
-    animation: str = "fade"          # none | fade
+    text_position: str = "top"          # top | center | bottom
+    text_offset: int = 0                # vertical offset (px)
+    animation: str = "smooth"           # smooth | none
 
 # ===============================
-# UTILS TEXTE
+# SMART TEXT WRAP (MAX 2 LINES)
 # ===============================
-
 def smart_wrap(text: str, font_size: int) -> str:
     text = text.upper()
 
@@ -45,36 +53,29 @@ def smart_wrap(text: str, font_size: int) -> str:
 
     return "\n".join(lines)
 
-def escape_ffmpeg_text(text: str) -> str:
-    return (
-        text
-        .replace("\\", "\\\\")
-        .replace(":", "\\:")
-        .replace("'", "\\'")
-        .replace("\n", "\\n")
-    )
-
 # ===============================
-# POSITION TEXTE
+# BASE Y POSITION
 # ===============================
-
-def get_y_position(position: str) -> str:
+def base_y(position: str) -> str:
     if position == "center":
         return "(h-text_h)/2"
     if position == "bottom":
         return "h-text_h-140"
-    return "120"   # top
+    return "120"  # top
 
 # ===============================
-# ENDPOINT PRINCIPAL
+# MAIN ENDPOINT
 # ===============================
-
 @app.post("/convert")
 def convert(data: ConvertRequest):
 
     uid = str(uuid.uuid4())
-    input_file = f"{TMP_DIR}/input_{uid}.webm"
-    output_file = f"{TMP_DIR}/output_{uid}.mp4"
+    input_video = f"{TMP_DIR}/input_{uid}.webm"
+    output_video = f"{TMP_DIR}/output_{uid}.mp4"
+    text_file = f"{TMP_DIR}/text_{uid}.txt"
+
+    logger.info(f"START render {uid}")
+    logger.info(f"Payload: {data.dict()}")
 
     # ---------- FONT SAFE ----------
     font_name = data.font.strip()
@@ -83,51 +84,75 @@ def convert(data: ConvertRequest):
 
     font_path = f"{FONT_DIR}/{font_name}"
     if not os.path.exists(font_path):
+        logger.warning("Font not found, fallback to default")
         font_path = f"{FONT_DIR}/{DEFAULT_FONT}"
 
-    # ---------- TEXTE ----------
-    wrapped = smart_wrap(data.text, data.font_size)
-    wrapped = escape_ffmpeg_text(wrapped)
+    # ---------- TEXT ----------
+    wrapped_text = smart_wrap(data.text, data.font_size)
 
-    y_pos = get_y_position(data.text_position)
+    with open(text_file, "w", encoding="utf-8") as f:
+        f.write(wrapped_text)
 
-    scale = "scale=1080:1350" if data.format == "4:5" else "scale=1080:1080"
+    logger.info("Wrapped text:")
+    logger.info(wrapped_text)
 
     # ---------- DOWNLOAD VIDEO ----------
     r = requests.get(data.drive_url, stream=True)
     if r.status_code != 200:
+        logger.error("Video download failed")
         raise HTTPException(status_code=400, detail="Video download failed")
 
-    with open(input_file, "wb") as f:
+    with open(input_video, "wb") as f:
         for chunk in r.iter_content(8192):
             f.write(chunk)
 
-    # ---------- DRAWTEXT ----------
+    logger.info("Video downloaded")
+
+    # ---------- FILTERS ----------
+    scale = "scale=1080:1350" if data.format == "4:5" else "scale=1080:1080"
+
+    y_base = base_y(data.text_position)
+
+    # apply offset (pixel-based)
+    y_expr = f"{y_base}+({data.text_offset})"
+
+    if data.animation == "smooth":
+        y_expr = f"{y_expr}+20*(1-exp(-3*t))"
+        alpha = "alpha='if(lt(t,1),1-exp(-3*t),1)'"
+    else:
+        alpha = "alpha=1"
+
     drawtext = (
-        f"drawtext=text='{wrapped}':"
-        f"fontfile={font_path}:"
+        f"drawtext=textfile='{text_file}':"
+        f"fontfile='{font_path}':"
         f"fontsize={data.font_size}:"
         "fontcolor=white:"
+        "borderw=4:"
+        "bordercolor=white@0.9:"
         "line_spacing=18:"
         "x=(w-text_w)/2:"
-        f"y={y_pos}:"
-        "box=1:"
-        "boxcolor=black@0.7:"
-        "boxborderw=36:"
-        "alpha='if(lt(t,0.6),t/0.6,1)'"
+        f"y={y_expr}:"
+        f"{alpha}"
     )
 
     vf = f"{scale},{drawtext}"
 
-    subprocess.run([
+    cmd = [
         "ffmpeg", "-y",
-        "-i", input_file,
+        "-i", input_video,
         "-vf", vf,
         "-c:v", "libx264",
         "-pix_fmt", "yuv420p",
         "-movflags", "+faststart",
-        output_file
-    ], check=True)
+        output_video
+    ]
+
+    logger.info("Running FFmpeg")
+    logger.info(" ".join(cmd))
+
+    subprocess.run(cmd, check=True)
+
+    logger.info("Render finished")
 
     return {
         "status": "ok",
@@ -137,7 +162,6 @@ def convert(data: ConvertRequest):
 # ===============================
 # DOWNLOAD
 # ===============================
-
 @app.get("/download/{uid}")
 def download(uid: str):
     path = f"{TMP_DIR}/output_{uid}.mp4"
