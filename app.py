@@ -192,6 +192,9 @@ def convert(data: ConvertRequest):
         alignment = 2  # Bottom center
         margin_v = 140 + data.text_offset
     
+    # Use DejaVu Sans with Noto Color Emoji as fallback for emoji support
+    font_name = "DejaVu Sans,Noto Color Emoji"
+    
     ass_content = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
@@ -199,7 +202,7 @@ PlayResY: {video_height}
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,DejaVu Sans,{data.font_size},&H00FFFFFF,&H000000FF,&H00FFFFFF,&H00000000,-1,0,0,0,100,100,0,0,1,2,0,{alignment},10,10,{margin_v},1
+Style: Default,{font_name},{data.font_size},&H00FFFFFF,&H000000FF,&H00FFFFFF,&H00000000,-1,0,0,0,100,100,0,0,1,2,0,{alignment},10,10,{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -210,6 +213,7 @@ Dialogue: 0,0:00:00.00,0:99:59.99,Default,,0,0,0,,{ass_text}
         f.write(ass_content)
     
     logger.info(f"[{job_id}] ASS subtitle created: {ass_file}")
+    logger.info(f"[{job_id}] Font: {font_name}")
     logger.info(f"[{job_id}] Position: {data.text_position}, Alignment: {alignment}, MarginV: {margin_v}")
     logger.info(f"[{job_id}] ASS text: {ass_text}")
 
