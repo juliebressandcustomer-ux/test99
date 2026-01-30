@@ -46,9 +46,36 @@ def root():
         "endpoints": {
             "convert": "POST /convert",
             "download": "GET /download/{uid}",
-            "debug_fonts": "GET /debug/fonts"
+            "debug_fonts": "GET /debug/fonts",
+            "debug_ffmpeg": "GET /debug/ffmpeg"
         }
     }
+
+@app.get("/debug/ffmpeg")
+def debug_ffmpeg():
+    """Check FFmpeg capabilities"""
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-filters"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        has_subtitles = "subtitles" in result.stdout
+        has_ass = "ass" in result.stdout
+        has_drawtext = "drawtext" in result.stdout
+        
+        return {
+            "ffmpeg_available": True,
+            "filters": {
+                "subtitles": has_subtitles,
+                "ass": has_ass,
+                "drawtext": has_drawtext
+            },
+            "version_info": result.stderr.split('\n')[0] if result.stderr else "Unknown"
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 TMP_DIR = "/tmp"
 # Use DejaVu fonts - more comprehensive Unicode support
@@ -164,12 +191,31 @@ def convert(data: ConvertRequest):
     
     logger.info(f"[{job_id}] Wrapped text: {repr(wrapped_text)}")
     
-    # Write text to file
-    text_file = f"{TMP_DIR}/text_{uid}.txt"
-    with open(text_file, "w", encoding="utf-8", newline='\n') as f:
-        f.write(wrapped_text)
+    # Create minimal ASS subtitle file
+    ass_file = f"{TMP_DIR}/subtitle_{uid}.ass"
     
-    logger.info(f"[{job_id}] Text written to file: {text_file}")
+    # Replace newlines with ASS line break
+    ass_text = wrapped_text.replace('\n', '\\N')
+    
+    # Minimal ASS format
+    ass_content = f"""[Script Info]
+Title: Video Text
+ScriptType: v4.00+
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,DejaVu Sans Bold,{data.font_size},&H00FFFFFF,&H00FFFFFF,&H00FFFFFF,&H00000000,-1,0,0,0,100,100,0,0,1,2,0,2,10,10,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,9:59:59.99,Default,,0,0,0,,{{\\an8\\pos(540,{120 + data.text_offset})}}{ass_text}
+"""
+    
+    with open(ass_file, "w", encoding="utf-8") as f:
+        f.write(ass_content)
+    
+    logger.info(f"[{job_id}] ASS subtitle file created: {ass_file}")
+    logger.info(f"[{job_id}] ASS text: {ass_text}")
 
     # ---------- STEP 3: VIDEO DOWNLOAD ----------
     logger.info(f"[{job_id}] STEP 3: Downloading video")
@@ -197,29 +243,13 @@ def convert(data: ConvertRequest):
     logger.info(f"[{job_id}] STEP 4: Building FFmpeg filters")
     
     scale = "scale=1080:1350" if data.format == "4:5" else "scale=1080:1080"
-    y_expr = f"{base_y(data.text_position)}+({data.text_offset})"
-
-    # Use textfile with expansion=none
-    drawtext = (
-        f"drawtext=textfile='{text_file}':"
-        f"fontfile='{font_path}':"
-        f"fontsize={data.font_size}:"
-        "fontcolor=white:"
-        "borderw=2:"
-        "bordercolor=white:"
-        "line_spacing=14:"
-        "x=(w-text_w)/2:"
-        f"y={y_expr}:"
-        "expansion=none"
-    )
-
-    vf = f"{scale},{drawtext}"
+    
+    # Use subtitles filter with ASS file
+    vf = f"{scale},subtitles={ass_file}"
     
     logger.info(f"[{job_id}] Scale filter: {scale}")
-    logger.info(f"[{job_id}] Y expression: {y_expr}")
-    logger.info(f"[{job_id}] Using text file: {text_file}")
-    logger.info(f"[{job_id}] Complete filter:")
-    logger.info(f"[{job_id}] {vf}")
+    logger.info(f"[{job_id}] Using ASS file: {ass_file}")
+    logger.info(f"[{job_id}] Complete filter: {vf}")
 
     # ---------- STEP 5: FFMPEG EXECUTION ----------
     logger.info(f"[{job_id}] STEP 5: Running FFmpeg")
