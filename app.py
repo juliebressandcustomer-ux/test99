@@ -119,17 +119,18 @@ def smart_wrap(text: str, font_size: int) -> str:
     if len(lines) > 2:
         lines = [lines[0], " ".join(lines[1:])]
 
-    return "\n".join(lines)
+    return lines  # Return as list for drawtext
 
 # ===============================
 # BASE Y POSITION
 # ===============================
-def base_y(position: str) -> str:
+def base_y(position: str, offset: int) -> int:
+    """Return pixel position for text"""
     if position == "center":
-        return "(h-text_h)/2"
+        return 540 + offset  # Center of 1080px
     if position == "bottom":
-        return "h-text_h-140"
-    return "120"  # top
+        return 940 + offset  # Near bottom
+    return 120 + offset  # Top
 
 # ===============================
 # MAIN ENDPOINT
@@ -141,7 +142,6 @@ def convert(data: ConvertRequest):
     job_id = uid[:8]  # Short ID for logging
     input_video = f"{TMP_DIR}/input_{uid}.webm"
     output_video = f"{TMP_DIR}/output_{uid}.mp4"
-    text_file = f"{TMP_DIR}/text_{uid}.txt"
 
     logger.info(f"[{job_id}] ===== START RENDER =====")
     logger.info(f"[{job_id}] Full UUID: {uid}")
@@ -171,51 +171,24 @@ def convert(data: ConvertRequest):
     # ---------- STEP 2: TEXT PROCESSING ----------
     logger.info(f"[{job_id}] STEP 2: Text processing")
     logger.info(f"[{job_id}] Raw input text: {repr(data.text)}")
-    logger.info(f"[{job_id}] Text bytes: {data.text.encode('utf-8').hex()}")
     
-    # Remove ALL invisible/special/non-printable characters INCLUDING emojis
+    # Clean text but keep accents for French
     import unicodedata
     
     clean_text = data.text
-    # Remove zero-width characters, control characters
-    clean_text = ''.join(char for char in clean_text if unicodedata.category(char)[0] != 'C' or char in '\n\r\t')
-    # Convert to ASCII only (removes emojis)
-    clean_text = clean_text.encode('ascii', 'ignore').decode('ascii')
-    # Remove extra spaces
+    # Remove control characters but keep letters with accents
+    clean_text = ''.join(char for char in clean_text 
+                        if unicodedata.category(char)[0] != 'C' or char in '\n\r\t')
+    # Remove emojis only (keep accented letters)
+    clean_text = ''.join(char for char in clean_text 
+                        if unicodedata.category(char)[0] not in ['So', 'Sk'])
+    # Clean up spaces
     clean_text = ' '.join(clean_text.split())
     
-    logger.info(f"[{job_id}] Clean text (ASCII only, emojis removed): {repr(clean_text)}")
-    logger.info(f"[{job_id}] Clean text bytes: {clean_text.encode('utf-8').hex()}")
+    logger.info(f"[{job_id}] Clean text: {repr(clean_text)}")
     
-    wrapped_text = smart_wrap(clean_text, data.font_size)
-    
-    logger.info(f"[{job_id}] Wrapped text: {repr(wrapped_text)}")
-    
-    # Create minimal ASS subtitle file
-    ass_file = f"{TMP_DIR}/subtitle_{uid}.ass"
-    
-    # Replace newlines with ASS line break
-    ass_text = wrapped_text.replace('\n', '\\N')
-    
-    # Minimal ASS format
-    ass_content = f"""[Script Info]
-Title: Video Text
-ScriptType: v4.00+
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,DejaVu Sans Bold,{data.font_size},&H00FFFFFF,&H00FFFFFF,&H00FFFFFF,&H00000000,-1,0,0,0,100,100,0,0,1,2,0,2,10,10,10,1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-Dialogue: 0,0:00:00.00,9:59:59.99,Default,,0,0,0,,{{\\an8\\pos(540,{120 + data.text_offset})}}{ass_text}
-"""
-    
-    with open(ass_file, "w", encoding="utf-8") as f:
-        f.write(ass_content)
-    
-    logger.info(f"[{job_id}] ASS subtitle file created: {ass_file}")
-    logger.info(f"[{job_id}] ASS text: {ass_text}")
+    wrapped_lines = smart_wrap(clean_text, data.font_size)
+    logger.info(f"[{job_id}] Wrapped into {len(wrapped_lines)} lines: {wrapped_lines}")
 
     # ---------- STEP 3: VIDEO DOWNLOAD ----------
     logger.info(f"[{job_id}] STEP 3: Downloading video")
@@ -242,14 +215,38 @@ Dialogue: 0,0:00:00.00,9:59:59.99,Default,,0,0,0,,{{\\an8\\pos(540,{120 + data.t
     # ---------- STEP 4: FFMPEG FILTER CONSTRUCTION ----------
     logger.info(f"[{job_id}] STEP 4: Building FFmpeg filters")
     
+    # Scale filter
     scale = "scale=1080:1350" if data.format == "4:5" else "scale=1080:1080"
     
-    # Use subtitles filter with ASS file
-    vf = f"{scale},subtitles={ass_file}"
+    # Build drawtext filters for each line
+    y_base = base_y(data.text_position, data.text_offset)
+    line_height = int(data.font_size * 1.2)  # 20% spacing between lines
     
-    logger.info(f"[{job_id}] Scale filter: {scale}")
-    logger.info(f"[{job_id}] Using ASS file: {ass_file}")
-    logger.info(f"[{job_id}] Complete filter: {vf}")
+    drawtext_filters = []
+    for i, line in enumerate(wrapped_lines):
+        y_pos = y_base + (i * line_height)
+        
+        # Escape special characters for FFmpeg
+        escaped_line = line.replace("'", "'\\\\\\''").replace(":", "\\:")
+        
+        dt = (
+            f"drawtext=fontfile='{font_path}':"
+            f"text='{escaped_line}':"
+            f"fontsize={data.font_size}:"
+            f"fontcolor=white:"
+            f"borderw=3:"
+            f"bordercolor=black:"
+            f"x=(w-text_w)/2:"
+            f"y={y_pos}"
+        )
+        drawtext_filters.append(dt)
+        logger.info(f"[{job_id}] Line {i+1}: '{line}' at y={y_pos}")
+    
+    # Combine all filters
+    vf = scale + "," + ",".join(drawtext_filters)
+    
+    logger.info(f"[{job_id}] Complete filter chain:")
+    logger.info(f"[{job_id}] {vf}")
 
     # ---------- STEP 5: FFMPEG EXECUTION ----------
     logger.info(f"[{job_id}] STEP 5: Running FFmpeg")
@@ -259,8 +256,11 @@ Dialogue: 0,0:00:00.00,9:59:59.99,Default,,0,0,0,,{{\\an8\\pos(540,{120 + data.t
         "-i", input_video,
         "-vf", vf,
         "-c:v", "libx264",
+        "-preset", "medium",
+        "-crf", "23",
         "-pix_fmt", "yuv420p",
         "-movflags", "+faststart",
+        "-c:a", "copy",
         output_video
     ]
 
@@ -280,7 +280,7 @@ Dialogue: 0,0:00:00.00,9:59:59.99,Default,,0,0,0,,{{\\an8\\pos(540,{120 + data.t
     except subprocess.CalledProcessError as e:
         logger.error(f"[{job_id}] ✗ FFmpeg failed with code {e.returncode}")
         logger.error(f"[{job_id}] FFmpeg stderr: {e.stderr}")
-        raise
+        raise HTTPException(status_code=500, detail=f"FFmpeg error: {e.stderr[-500:]}")
 
     # ---------- STEP 6: VERIFY OUTPUT ----------
     logger.info(f"[{job_id}] STEP 6: Verifying output")
@@ -291,13 +291,16 @@ Dialogue: 0,0:00:00.00,9:59:59.99,Default,,0,0,0,,{{\\an8\\pos(540,{120 + data.t
         logger.info(f"[{job_id}] ✓ Output path: {output_video}")
     else:
         logger.error(f"[{job_id}] ✗ Output file NOT created!")
+        raise HTTPException(status_code=500, detail="Output file not created")
 
     logger.info(f"[{job_id}] ===== RENDER COMPLETE =====")
 
     return {
         "status": "ok",
         "job_id": job_id,
-        "download_url": f"/download/{uid}"
+        "download_url": f"/download/{uid}",
+        "text_lines": wrapped_lines,
+        "font_used": font_path
     }
 
 # ===============================
