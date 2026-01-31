@@ -16,7 +16,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the actual app file
-COPY app-3.py app.py
+COPY app.py app.py
 
 # Set UTF-8 locale
 ENV LC_ALL=C.UTF-8
